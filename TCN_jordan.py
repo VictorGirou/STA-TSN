@@ -3,11 +3,12 @@ import torch
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-
+import random
+import os
 
 class PSTA_TCN(nn.Module):
 
-    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1):
+    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1,seed=0):
 
         super().__init__()
 
@@ -25,8 +26,10 @@ class PSTA_TCN(nn.Module):
         self.last_loss=np.inf
         self.patience=patience
         self.conv_dilatation=conv_dilatation
+        self.seed=seed
         # Attention mechanisms
 
+        random.seed(self.seed)
         self.spatial_attention = nn.Sequential(
             nn.Linear(in_features=self.T, out_features=self.T, bias=True),
             nn.Softmax(dim=1),
@@ -191,7 +194,21 @@ class PSTA_TCN(nn.Module):
 
         return val_loss.item()
 
+    def set_seed(self) -> None:
+        np.random.seed(self.seed)
+        random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        # torch.cuda.manual_self.seed(self.seed)
+        # When running on the CuDNN backend, two further options must be set
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False
+        # Set a fixed value for the hash self.seed
+        os.environ["PYTHONHASHSEED"] = str(self.seed)
+        print(f"Random self.seed set as {self.seed}")
+
     def fit(self, train_set, val_set):
+
+        self.set_seed()
 
         self.optimizer = getattr(torch.optim,'Adam')(self.parameters(), lr=self.lr)
         train_set = torch.from_numpy(train_set.astype('float32').values)
