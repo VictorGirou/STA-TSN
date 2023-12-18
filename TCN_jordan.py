@@ -8,7 +8,7 @@ import os
 
 class PSTA_TCN(nn.Module):
 
-    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1,seed=0):
+    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1,seed=0,number_TCN=2):
 
         super().__init__()
 
@@ -27,6 +27,8 @@ class PSTA_TCN(nn.Module):
         self.patience=patience
         self.conv_dilatation=conv_dilatation
         self.seed=seed
+        self.number_TCN=number_TCN
+        self.dropout_rate = dropout_rate
         # Attention mechanisms
 
         random.seed(self.seed)
@@ -64,7 +66,11 @@ class PSTA_TCN(nn.Module):
         self.norm_spatial = nn.BatchNorm1d(num_features=self.T)
         self.norm_temporal = nn.BatchNorm1d(num_features=self.n)
 
+
         self.dropout = nn.Dropout(p=dropout_rate)
+
+        self.spatial_TCN = self.build_TCN('spatial')
+        self.temporal_TCN = self.build_TCN('temporal')
 
         # Dense layers
 
@@ -82,6 +88,10 @@ class PSTA_TCN(nn.Module):
             nn.Linear(in_features=self.T, out_features=self.tau),
         )
 
+        self.dense_layers_spatial_jordan = nn.Sequential(
+            nn.Linear(in_features=self.n, out_features=1),
+        )
+
         self.dense_layers_temporal1 = nn.Sequential(
             nn.Linear(in_features=self.n, out_features=self.H),
             nn.ReLU(),
@@ -96,33 +106,67 @@ class PSTA_TCN(nn.Module):
             nn.Linear(in_features=self.T, out_features=self.tau),
         )
 
+        self.dense_layers_temporal_jordan = nn.Sequential(
+            nn.Linear(in_features=self.T, out_features=1),
+        )
+
+    def build_TCN(self,type):
+        channel=self.n if type=='spatial' else self.T
+        TCN_list=[]
+        for i in range(self.number_TCN):
+            # Dilated Causal Convolution
+            dilated_conv = nn.Conv1d(
+                in_channels=channel,
+                out_channels=channel,
+                kernel_size=self.k,
+                dilation=self.conv_dilatation,
+                padding=(self.k - 1) // 2
+            )
+            weight_norm_conv = nn.utils.weight_norm(dilated_conv)
+
+            # Batch Normalization, ReLU, and Dropout
+            block = nn.Sequential(
+                weight_norm_conv,
+                nn.BatchNorm1d(num_features=channel),
+                nn.ReLU(),
+                nn.Dropout(p=self.dropout_rate)
+            )
+
+            TCN_list.append(block)
+
+        return nn.Sequential(*TCN_list)
     def forward(self, x):
+
         x_s = self.spatial_attention(torch.transpose(x, -2, -1))
         x_t = self.temporal_attention(x)
 
         # Compute the TCN spatial backbone
 
-        y_s = self.spatial_conv(x_s)
-        y_s = nn.ReLU()(y_s)
-        y_s = self.dropout(y_s)
+        # y_s = self.spatial_conv(x_s)
+        # y_s = nn.ReLU()(y_s)
+        # y_s = self.dropout(y_s)
+        y_s=self.spatial_TCN(x_s)
 
         y_s += x_s
 
         y_s = self.dense_layers_spatial1(torch.transpose(y_s, -2, -1))
         y_s = self.dense_layers_spatial2(y_s)
         y_s = self.dense_layers_spatial3(torch.transpose(y_s, -2, -1))
-
+        # y_s = self.dense_layers_spatial_jordan(torch.transpose(y_s, -2, -1))
         # Compute the TCN temporal backbone
 
-        y_t = self.temporal_conv(x_t)
-        y_t = nn.ReLU()(y_t)
-        y_t = self.dropout(y_t)
+        # y_t = self.temporal_conv(x_t)
+        # y_t = nn.ReLU()(y_t)
+        # y_t = self.dropout(y_t)
+
+        y_t=self.temporal_TCN(x_t)
 
         y_t += x_t
 
         y_t = self.dense_layers_temporal1(y_t)
         y_t = self.dense_layers_temporal2(y_t)
         y_t = self.dense_layers_temporal3(torch.transpose(y_t, -2, -1))
+        # y_t=self.dense_layers_temporal_jordan(y_t)
 
         return y_s + y_t
 
@@ -150,18 +194,18 @@ class PSTA_TCN(nn.Module):
             val_loss=self.validate(valloader)
             if val_loss > self.last_loss:
                 trigger_times += 1
-                # print('Trigger Times:', trigger_times)
+                print('Trigger Times:', trigger_times)
 
                 if trigger_times >= self.patience:
-                    # print('Early stopping!\nStart to test process.')
+                    print('Early stopping!\nStart to test process.')
                     return
 
             else:
                 self.last_loss = val_loss
-                # print('trigger times: 0')
+                print('trigger times: 0')
                 trigger_times = 0
 
-            # print(f'epochs {epoch}: training_loss: {training_loss}, validation_loss:{val_loss} \t')
+            print(f'epochs {epoch}: training_loss: {training_loss}, validation_loss:{val_loss} \t')
 
     def training_step(self, data,target):
         self.train()
@@ -180,6 +224,7 @@ class PSTA_TCN(nn.Module):
         val_loss=0
         for data, target in valloader:
             val_loss += self.validation_step(data, target)
+
 
         return val_loss/len(valloader)
 
@@ -236,8 +281,8 @@ if __name__ == '__main__':
 
     n_signals = 8
     window_size = 40
-    kernel_size = 9 #7
-    n_hidden_layers = 5
+    kernel_size = 7 #7
+    n_hidden_layers = 2
     n_hidden_dimensions = 5
     prediction_horizon = 2
 
@@ -249,6 +294,9 @@ if __name__ == '__main__':
         n_signals=n_signals,
         prediction_horizon=prediction_horizon,
         batch_size=100,
+        number_TCN=3,
+        seed=50,
+        dropout_rate=0.1,
     )
 
     data_set = pd.read_csv(r'Dataset/exchange_rate.csv')
