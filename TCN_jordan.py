@@ -8,7 +8,7 @@ import os
 
 class PSTA_TCN(nn.Module):
 
-    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1,seed=0,number_TCN=2):
+    def __init__(self, window_size, kernel_size, n_hidden_layers, n_hidden_dimensions, n_signals, prediction_horizon,lr=0.0001,dropout_rate=0.01,batch_size=64,nb_epochs=100,patience=20,conv_dilatation=1,seed=0,number_TCN=2,name_model=''):
 
         super().__init__()
 
@@ -110,6 +110,8 @@ class PSTA_TCN(nn.Module):
             nn.Linear(in_features=self.T, out_features=1),
         )
 
+        self.model_save_path = r'/Users/jordan/Documents/MVA/ML_TS_2023/Projet/saved_models/model_'+name_model+'_' + str(self.seed) + '.pt'
+
     def build_TCN(self,type):
         channel=self.n if type=='spatial' else self.T
         TCN_list=[]
@@ -120,14 +122,14 @@ class PSTA_TCN(nn.Module):
                 out_channels=channel,
                 kernel_size=self.k,
                 dilation=self.conv_dilatation,
-                padding=(self.k - 1) // 2
+                padding=((self.k - 1)*self.conv_dilatation // 2),
             )
             weight_norm_conv = nn.utils.weight_norm(dilated_conv)
 
             # Batch Normalization, ReLU, and Dropout
             block = nn.Sequential(
                 weight_norm_conv,
-                nn.BatchNorm1d(num_features=channel),
+                # nn.BatchNorm1d(num_features=channel),
                 nn.ReLU(),
                 nn.Dropout(p=self.dropout_rate)
             )
@@ -194,18 +196,21 @@ class PSTA_TCN(nn.Module):
             val_loss=self.validate(valloader)
             if val_loss > self.last_loss:
                 trigger_times += 1
-                print('Trigger Times:', trigger_times)
+                # print('Trigger Times:', trigger_times)
 
                 if trigger_times >= self.patience:
-                    print('Early stopping!\nStart to test process.')
-                    return
+                    # print('Early stopping!\nStart to test process.')
+
+                    break
 
             else:
                 self.last_loss = val_loss
-                print('trigger times: 0')
+                # print('trigger times: 0')
                 trigger_times = 0
 
-            print(f'epochs {epoch}: training_loss: {training_loss}, validation_loss:{val_loss} \t')
+        torch.save(self.state_dict(), self.model_save_path)
+
+            # print(f'epochs {epoch}: training_loss: {training_loss}, validation_loss:{val_loss} \t')
 
     def training_step(self, data,target):
         self.train()
@@ -243,13 +248,13 @@ class PSTA_TCN(nn.Module):
         np.random.seed(self.seed)
         random.seed(self.seed)
         torch.manual_seed(self.seed)
-        # torch.cuda.manual_self.seed(self.seed)
+        # torch.cuda.manual.seed(self.seed)
         # When running on the CuDNN backend, two further options must be set
-        # torch.backends.cudnn.deterministic = True
-        # torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
         # Set a fixed value for the hash self.seed
         os.environ["PYTHONHASHSEED"] = str(self.seed)
-        print(f"Random self.seed set as {self.seed}")
+        # print(f"Random self.seed set as {self.seed}")
 
     def fit(self, train_set, val_set):
 
@@ -260,9 +265,9 @@ class PSTA_TCN(nn.Module):
         val_set = torch.from_numpy(val_set.astype('float32').values)
 
         train_data = [[train_set[i: i + self.T], train_set[i+self.T: i + self.T + self.tau][:, 0]] for i in
-                      range(len(train_set) - self.T - self.tau)]
+                      range(0,len(train_set) - self.T - self.tau,self.tau)]
         val_data = [[val_set[i: i + self.T], val_set[i + self.T: i + self.T + self.tau][:, 0]] for i in
-                    range(len(val_set) - self.T - self.tau)]
+                    range(0,len(val_set) - self.T - self.tau,self.tau)]
 
         train_set=torch.utils.data.TensorDataset(torch.stack([elt[0] for elt in train_data]),torch.stack([elt[1] for elt in train_data]))
         trainloader = torch.utils.data.DataLoader(train_set, batch_size=self.batch_size,shuffle=True)
@@ -297,6 +302,8 @@ if __name__ == '__main__':
         number_TCN=3,
         seed=50,
         dropout_rate=0.1,
+        nb_epochs=1,
+        conv_dilatation=2,
     )
 
     data_set = pd.read_csv(r'Dataset/exchange_rate.csv')
